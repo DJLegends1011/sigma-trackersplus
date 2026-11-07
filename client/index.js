@@ -7,7 +7,7 @@ import { stateHtml, setEscaper } from './render.js';
 import { createEditor } from './editor.js';
 import { SETTING_LIMITS, settingNumber } from './model.js';
 
-const ID = 'trackers-plus';
+const ID = 'trackersplus';
 
 export default {
     init(ctx) {
@@ -22,7 +22,7 @@ export default {
         let view = null;
         ctx.ui.addChatWindow({
             id: ID,
-            label: 'Trackers',
+            label: 'Trackers Plus',
             icon: 'fa-clipboard-list',
             min: { w: 26, h: 30 },
             size: { w: 32, h: 72 },

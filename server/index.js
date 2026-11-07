@@ -11,36 +11,36 @@ import {
 
 // append-only; a state is keyed to its message by (chat_id, seq), so a delete's renumbering carries it down
 export const migrations = [
-    `CREATE TABLE x_trackers_plus_defs (
+    `CREATE TABLE x_trackersplus_defs (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         data TEXT NOT NULL CHECK (json_valid(data)),
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL);
-     CREATE TABLE x_trackers_plus_chats (
+     CREATE TABLE x_trackersplus_chats (
         chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
-        def_id TEXT NOT NULL REFERENCES x_trackers_plus_defs(id) ON DELETE CASCADE,
+        def_id TEXT NOT NULL REFERENCES x_trackersplus_defs(id) ON DELETE CASCADE,
         position INTEGER NOT NULL,
         paused INTEGER NOT NULL DEFAULT 0,
         error TEXT,
         error_at INTEGER,
         added_at INTEGER NOT NULL,
         PRIMARY KEY (chat_id, def_id)) WITHOUT ROWID;
-     CREATE INDEX x_trackers_plus_chats_def ON x_trackers_plus_chats(def_id);
-     CREATE TABLE x_trackers_plus_states (
+     CREATE INDEX x_trackersplus_chats_def ON x_trackersplus_chats(def_id);
+     CREATE TABLE x_trackersplus_states (
         chat_id TEXT NOT NULL,
         seq INTEGER NOT NULL,
-        def_id TEXT NOT NULL REFERENCES x_trackers_plus_defs(id) ON DELETE CASCADE,
+        def_id TEXT NOT NULL REFERENCES x_trackersplus_defs(id) ON DELETE CASCADE,
         digest TEXT NOT NULL,
         state TEXT NOT NULL CHECK (json_valid(state)),
         source TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         PRIMARY KEY (chat_id, seq, def_id, digest),
         FOREIGN KEY (chat_id, seq) REFERENCES chat_messages(chat_id, seq) ON DELETE CASCADE ON UPDATE CASCADE) WITHOUT ROWID;
-     CREATE INDEX x_trackers_plus_states_walk ON x_trackers_plus_states(chat_id, def_id, seq, digest);
-     CREATE INDEX x_trackers_plus_states_def ON x_trackers_plus_states(def_id);`,
+     CREATE INDEX x_trackersplus_states_walk ON x_trackersplus_states(chat_id, def_id, seq, digest);
+     CREATE INDEX x_trackersplus_states_def ON x_trackersplus_states(def_id);`,
     // a definition's name is its column alone (the list sorts by it); data keeps the rest
-    "UPDATE x_trackers_plus_defs SET data = json_remove(data, '$.name');",
+    "UPDATE x_trackersplus_defs SET data = json_remove(data, '$.name');",
 ];
 
 const PLACEMENTS = ['pre_history', 'post_history', 'at_depth', 'none'];
@@ -101,19 +101,19 @@ export function register(router, ctx) {
     // the name composed back from its column onto the stored rest, first as a definition reads it
     const withName = (data, name) => (isObj(data) ? Object.assign({ name }, data, { name }) : null);
     const restOf = (def) => JSON.stringify({ ...def, name: undefined });
-    const defExists = (db, id) => !!db.prepare('SELECT 1 FROM x_trackers_plus_defs WHERE id = ?').get(id);
+    const defExists = (db, id) => !!db.prepare('SELECT 1 FROM x_trackersplus_defs WHERE id = ?').get(id);
     // a chat's trackers in its order, each with its definition
     const bindingsOf = (db, chatId) => db.prepare(`SELECT c.def_id, c.position, c.paused, c.error, c.error_at, d.name, d.data
-        FROM x_trackers_plus_chats c JOIN x_trackers_plus_defs d ON d.id = c.def_id WHERE c.chat_id = ? ORDER BY c.position, c.added_at`)
+        FROM x_trackersplus_chats c JOIN x_trackersplus_defs d ON d.id = c.def_id WHERE c.chat_id = ? ORDER BY c.position, c.added_at`)
         .all(chatId).map(r => ({ ...r, def: withName(parsed(r.data), r.name) })).filter(r => isObj(r.def));
     const bindingOf = (db, chatId, defId) => bindingsOf(db, chatId).find(b => b.def_id === defId) || null;
-    const chatsUsing = (db, defId) => db.prepare('SELECT chat_id FROM x_trackers_plus_chats WHERE def_id = ?').all(defId).map(r => r.chat_id);
+    const chatsUsing = (db, defId) => db.prepare('SELECT chat_id FROM x_trackersplus_chats WHERE def_id = ?').all(defId).map(r => r.chat_id);
     // a write to these tables, told to the chats it changes (inside the write's transaction)
     const report = (db, chatIds, field) => {
-        if (chatIds.length) ctx.report(db, { entity: 'chat', op: 'updated', ids: chatIds, fields: [`trackers-plus.${field}`] });
+        if (chatIds.length) ctx.report(db, { entity: 'chat', op: 'updated', ids: chatIds, fields: [`trackersplus.${field}`] });
     };
     const hasStateAt = (db, chatId, defId, seq, digest) => !!db.prepare(
-        'SELECT 1 FROM x_trackers_plus_states WHERE chat_id = ? AND seq = ? AND def_id = ? AND digest = ?').get(chatId, seq, defId, digest);
+        'SELECT 1 FROM x_trackersplus_states WHERE chat_id = ? AND seq = ? AND def_id = ? AND digest = ?').get(chatId, seq, defId, digest);
 
     // a stored message the prompt reads, or null (hidden, a system note, empty, gone), each read once
     const shownAt = (db, chatId) => {
@@ -130,7 +130,7 @@ export function register(router, ctx) {
     // a tracker's state as of message upTo: the newest row the prompt reads whose digest still matches its text
     const stateAsOf = (db, chatId, defId, upTo, messageAt) => {
         if (!Number.isInteger(upTo) || upTo < 0) return null;
-        const page = db.prepare(`SELECT seq, digest FROM x_trackers_plus_states WHERE chat_id = ? AND def_id = ?
+        const page = db.prepare(`SELECT seq, digest FROM x_trackersplus_states WHERE chat_id = ? AND def_id = ?
             AND (seq < ? OR (seq = ? AND digest < ?)) ORDER BY seq DESC, digest DESC LIMIT 32`);
         let from = { seq: upTo + 1, digest: '' };
         for (;;) {
@@ -138,7 +138,7 @@ export function register(router, ctx) {
             for (const r of rows) {
                 const msg = messageAt(r.seq);
                 if (!msg || digestOf(shownText(msg)) !== r.digest) continue;
-                const row = db.prepare('SELECT state, source, created_at FROM x_trackers_plus_states WHERE chat_id = ? AND seq = ? AND def_id = ? AND digest = ?')
+                const row = db.prepare('SELECT state, source, created_at FROM x_trackersplus_states WHERE chat_id = ? AND seq = ? AND def_id = ? AND digest = ?')
                     .get(chatId, r.seq, defId, r.digest);
                 const state = row && parsed(row.state);
                 if (isObj(state)) return { seq: r.seq, digest: r.digest, state, source: row.source, createdAt: row.created_at };
@@ -164,13 +164,13 @@ export function register(router, ctx) {
     const storeState = (db, chatId, seq, defId, digest, state, source, msg) => {
         const keep = new Set(heldTexts(msg).map(digestOf));
         keep.add(digest);
-        for (const r of db.prepare('SELECT digest FROM x_trackers_plus_states WHERE chat_id = ? AND seq = ? AND def_id = ?').all(chatId, seq, defId)) {
-            if (!keep.has(r.digest)) db.prepare('DELETE FROM x_trackers_plus_states WHERE chat_id = ? AND seq = ? AND def_id = ? AND digest = ?').run(chatId, seq, defId, r.digest);
+        for (const r of db.prepare('SELECT digest FROM x_trackersplus_states WHERE chat_id = ? AND seq = ? AND def_id = ?').all(chatId, seq, defId)) {
+            if (!keep.has(r.digest)) db.prepare('DELETE FROM x_trackersplus_states WHERE chat_id = ? AND seq = ? AND def_id = ? AND digest = ?').run(chatId, seq, defId, r.digest);
         }
-        db.prepare(`INSERT INTO x_trackers_plus_states (chat_id, seq, def_id, digest, state, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+        db.prepare(`INSERT INTO x_trackersplus_states (chat_id, seq, def_id, digest, state, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id, seq, def_id, digest) DO UPDATE SET state = excluded.state, source = excluded.source, created_at = excluded.created_at`)
             .run(chatId, seq, defId, digest, JSON.stringify(state), source, Date.now());
-        db.prepare('UPDATE x_trackers_plus_chats SET error = NULL, error_at = NULL WHERE chat_id = ? AND def_id = ?').run(chatId, defId);
+        db.prepare('UPDATE x_trackersplus_chats SET error = NULL, error_at = NULL WHERE chat_id = ? AND def_id = ?').run(chatId, defId);
         report(db, [chatId], 'state');
     };
 
@@ -257,7 +257,7 @@ export function register(router, ctx) {
                 if (signal.aborted) return;
                 failed.push(`${b.name}: ${e.message}`);
                 db.transaction(() => {
-                    const n = db.prepare('UPDATE x_trackers_plus_chats SET error = ?, error_at = ? WHERE chat_id = ? AND def_id = ?')
+                    const n = db.prepare('UPDATE x_trackersplus_chats SET error = ?, error_at = ? WHERE chat_id = ? AND def_id = ?')
                         .run(String(e.message).slice(0, 500), Date.now(), chatId, b.def_id).changes;
                     if (n) report(db, [chatId], 'error');
                 })();
@@ -267,7 +267,7 @@ export function register(router, ctx) {
             db.transaction(() => {
                 const now = ctx.stores.chats.readMessageRow(db, chatId, anchor.seq);
                 if (!ctx.prompt.visible(now) || digestOf(shownText(now)) !== digest) return;
-                if (!db.prepare('SELECT 1 FROM x_trackers_plus_chats WHERE chat_id = ? AND def_id = ?').get(chatId, b.def_id)) return;
+                if (!db.prepare('SELECT 1 FROM x_trackersplus_chats WHERE chat_id = ? AND def_id = ?').get(chatId, b.def_id)) return;
                 storeState(db, chatId, anchor.seq, b.def_id, digest, next, 'model', now);
             })();
         }
@@ -294,10 +294,10 @@ export function register(router, ctx) {
 
     // a branch keeps the parent's trackers and every state up to its branch point; each digest still holds
     const carryToBranch = (db, branchId, { chatId, seq }) => db.transaction(() => {
-        const bound = db.prepare(`INSERT OR IGNORE INTO x_trackers_plus_chats (chat_id, def_id, position, paused, error, error_at, added_at)
-            SELECT ?, def_id, position, paused, NULL, NULL, ? FROM x_trackers_plus_chats WHERE chat_id = ?`).run(branchId, Date.now(), chatId).changes;
-        const held = db.prepare(`INSERT OR IGNORE INTO x_trackers_plus_states (chat_id, seq, def_id, digest, state, source, created_at)
-            SELECT ?, seq, def_id, digest, state, source, created_at FROM x_trackers_plus_states WHERE chat_id = ? AND seq <= ?`).run(branchId, chatId, seq).changes;
+        const bound = db.prepare(`INSERT OR IGNORE INTO x_trackersplus_chats (chat_id, def_id, position, paused, error, error_at, added_at)
+            SELECT ?, def_id, position, paused, NULL, NULL, ? FROM x_trackersplus_chats WHERE chat_id = ?`).run(branchId, Date.now(), chatId).changes;
+        const held = db.prepare(`INSERT OR IGNORE INTO x_trackersplus_states (chat_id, seq, def_id, digest, state, source, created_at)
+            SELECT ?, seq, def_id, digest, state, source, created_at FROM x_trackersplus_states WHERE chat_id = ? AND seq <= ?`).run(branchId, chatId, seq).changes;
         if (bound) report(db, [branchId], 'list');
         if (held) report(db, [branchId], 'state');
     })();
@@ -329,8 +329,8 @@ export function register(router, ctx) {
     // the reader's definitions, each with how many chats keep it
     router.get('/defs', (req, res) => {
         const rows = req.db.prepare(`SELECT d.id, d.name, d.data, d.created_at, d.updated_at,
-            (SELECT COUNT(*) FROM x_trackers_plus_chats c WHERE c.def_id = d.id) AS chats
-            FROM x_trackers_plus_defs d ORDER BY d.name COLLATE NOCASE, d.created_at`).all();
+            (SELECT COUNT(*) FROM x_trackersplus_chats c WHERE c.def_id = d.id) AS chats
+            FROM x_trackersplus_defs d ORDER BY d.name COLLATE NOCASE, d.created_at`).all();
         res.json({
             defs: rows.map(r => ({ ...(withName(parsed(r.data), r.name) || { name: r.name }), id: r.id, chats: r.chats, createdAt: r.created_at, updatedAt: r.updated_at })),
         });
@@ -357,7 +357,7 @@ export function register(router, ctx) {
         if (!def) return;
         const id = crypto.randomUUID();
         const now = Date.now();
-        req.db.prepare('INSERT INTO x_trackers_plus_defs (id, name, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+        req.db.prepare('INSERT INTO x_trackersplus_defs (id, name, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
             .run(id, def.name, restOf(def), now, now);
         res.json({ id });
     });
@@ -367,7 +367,7 @@ export function register(router, ctx) {
         const def = checkedDef(req, res);
         if (!def) return;
         const done = req.db.transaction(() => {
-            const n = req.db.prepare('UPDATE x_trackers_plus_defs SET name = ?, data = ?, updated_at = ? WHERE id = ?')
+            const n = req.db.prepare('UPDATE x_trackersplus_defs SET name = ?, data = ?, updated_at = ? WHERE id = ?')
                 .run(def.name, restOf(def), Date.now(), req.params.id).changes;
             if (n) report(req.db, chatsUsing(req.db, req.params.id), 'defs');
             return n > 0;
@@ -380,7 +380,7 @@ export function register(router, ctx) {
     router.delete('/defs/:id', (req, res) => {
         const done = req.db.transaction(() => {
             const chats = chatsUsing(req.db, req.params.id);
-            const n = req.db.prepare('DELETE FROM x_trackers_plus_defs WHERE id = ?').run(req.params.id).changes;
+            const n = req.db.prepare('DELETE FROM x_trackersplus_defs WHERE id = ?').run(req.params.id).changes;
             if (n) report(req.db, chats, 'list');
             return n > 0;
         })();
@@ -431,9 +431,9 @@ export function register(router, ctx) {
         const defId = String(req.body?.defId || '');
         if (!defExists(req.db, defId)) return res.status(404).json({ error: 'no such tracker' });
         const added = req.db.transaction(() => {
-            if (req.db.prepare('SELECT 1 FROM x_trackers_plus_chats WHERE chat_id = ? AND def_id = ?').get(chatId, defId)) return false;
-            const position = req.db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM x_trackers_plus_chats WHERE chat_id = ?').get(chatId).p;
-            req.db.prepare('INSERT INTO x_trackers_plus_chats (chat_id, def_id, position, paused, added_at) VALUES (?, ?, ?, 0, ?)')
+            if (req.db.prepare('SELECT 1 FROM x_trackersplus_chats WHERE chat_id = ? AND def_id = ?').get(chatId, defId)) return false;
+            const position = req.db.prepare('SELECT COALESCE(MAX(position) + 1, 0) AS p FROM x_trackersplus_chats WHERE chat_id = ?').get(chatId).p;
+            req.db.prepare('INSERT INTO x_trackersplus_chats (chat_id, def_id, position, paused, added_at) VALUES (?, ?, ?, 0, ?)')
                 .run(chatId, defId, position, Date.now());
             report(req.db, [chatId], 'list');
             return true;
@@ -455,12 +455,12 @@ export function register(router, ctx) {
         if (paused === undefined && position === undefined) return res.status(400).json({ error: 'name paused or position' });
         req.db.transaction(() => {
             if (paused !== undefined) {
-                req.db.prepare('UPDATE x_trackers_plus_chats SET paused = ? WHERE chat_id = ? AND def_id = ?').run(paused ? 1 : 0, chatId, b.def_id);
+                req.db.prepare('UPDATE x_trackersplus_chats SET paused = ? WHERE chat_id = ? AND def_id = ?').run(paused ? 1 : 0, chatId, b.def_id);
             }
             if (position !== undefined) {
                 const order = bindingsOf(req.db, chatId).map(x => x.def_id).filter(id => id !== b.def_id);
                 order.splice(Math.min(position, order.length), 0, b.def_id);
-                const place = req.db.prepare('UPDATE x_trackers_plus_chats SET position = ? WHERE chat_id = ? AND def_id = ?');
+                const place = req.db.prepare('UPDATE x_trackersplus_chats SET position = ? WHERE chat_id = ? AND def_id = ?');
                 order.forEach((id, i) => place.run(i, chatId, id));
             }
             report(req.db, [chatId], 'list');
@@ -476,8 +476,8 @@ export function register(router, ctx) {
         const b = bindingOr404(req, res, chatId);
         if (!b) return;
         req.db.transaction(() => {
-            req.db.prepare('DELETE FROM x_trackers_plus_states WHERE chat_id = ? AND def_id = ?').run(chatId, b.def_id);
-            req.db.prepare('DELETE FROM x_trackers_plus_chats WHERE chat_id = ? AND def_id = ?').run(chatId, b.def_id);
+            req.db.prepare('DELETE FROM x_trackersplus_states WHERE chat_id = ? AND def_id = ?').run(chatId, b.def_id);
+            req.db.prepare('DELETE FROM x_trackersplus_chats WHERE chat_id = ? AND def_id = ?').run(chatId, b.def_id);
             report(req.db, [chatId], 'list');
         })();
         res.json({ ok: true });
@@ -496,7 +496,7 @@ export function register(router, ctx) {
         const out = req.db.transaction(() => {
             let seq, digest, base;
             if (at) {
-                const row = req.db.prepare('SELECT state FROM x_trackers_plus_states WHERE chat_id = ? AND seq = ? AND def_id = ? AND digest = ?')
+                const row = req.db.prepare('SELECT state FROM x_trackersplus_states WHERE chat_id = ? AND seq = ? AND def_id = ? AND digest = ?')
                     .get(chatId, at.seq, b.def_id, at.digest);
                 if (!row) return { status: 409, error: 'that state is not kept any more: the chat moved on' };
                 ({ seq, digest } = at);
@@ -530,7 +530,7 @@ export function register(router, ctx) {
         const digest = digestOf(shownText(anchor.msg));
         if (redo) {
             req.db.transaction(() => {
-                const n = req.db.prepare('DELETE FROM x_trackers_plus_states WHERE chat_id = ? AND seq = ? AND def_id = ? AND digest = ?')
+                const n = req.db.prepare('DELETE FROM x_trackersplus_states WHERE chat_id = ? AND seq = ? AND def_id = ? AND digest = ?')
                     .run(chatId, anchor.seq, defId, digest).changes;
                 if (n) report(req.db, [chatId], 'state');
             })();
