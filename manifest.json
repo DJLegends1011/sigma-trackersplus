@@ -1,7 +1,7 @@
 {
     "id": "trackersplus",
     "name": "Trackers Plus",
-    "version": "0.1.0",
+    "version": "1.0.0",
     "author": "DJLegends, from Project Σ's Trackers",
     "description": "The bundled Trackers, with one addition: the Chat Assistant can read them. Keeps track of what a chat should: a scene, a cast, an inventory, relationships, or anything you define. Your own model updates each tracker after every reply.",
     "requires": {
